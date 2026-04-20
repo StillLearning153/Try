@@ -1,0 +1,1540 @@
+-- FourHub | Sailor Piece — Converted to Rayfield UI
+-- Original: Obsidian Library | Converted: Rayfield Library
+
+if getgenv().FourHub_Running then
+    warn("Script already running!")
+    return
+end
+
+repeat task.wait() until game:IsLoaded()
+repeat task.wait() until game.GameId ~= 0
+
+function missing(t, f, fallback)
+	if type(f) == t then return f end
+	return fallback
+end
+
+cloneref = missing("function", cloneref, function(...) return ... end)
+getgc = missing("function", getgc or get_gc_objects)
+getconnections = missing("function", getconnections or get_signal_cons)
+
+Services = setmetatable({}, {
+	__index = function(self, name)
+		local success, cache = pcall(function()
+			return cloneref(game:GetService(name))
+		end)
+		if success then
+			rawset(self, name, cache)
+			return cache
+		else
+			error("Invalid Service: " .. tostring(name))
+		end
+	end
+})
+
+local Players = Services.Players
+local Plr = Players.LocalPlayer
+local Char = Plr.Character or Plr.CharacterAdded:Wait()
+local PGui = Plr:WaitForChild("PlayerGui")
+local Lighting = game:GetService('Lighting')
+
+local RS = Services.ReplicatedStorage
+local RunService = Services.RunService
+local HttpService = Services.HttpService
+local GuiService = Services.GuiService
+local TeleportService = Services.TeleportService
+local Marketplace = Services.MarketplaceService
+local UIS = Services.UserInputService
+local VirtualUser = Services.VirtualUser
+
+local v, Asset = pcall(function()
+    return Marketplace:GetProductInfo(game.PlaceId)
+end)
+
+local assetName = "sailor piece"
+if v and Asset then
+    assetName = Asset.Name
+end
+
+local Support = {
+    Webhook = (typeof(request) == "function" or typeof(http_request) == "function"),
+    Clipboard = (typeof(setclipboard) == "function"),
+    FileIO = (typeof(writefile) == "function" and typeof(isfile) == "function"),
+    QueueOnTeleport = (typeof(queue_on_teleport) == "function"),
+    Connections = (typeof(getconnections) == "function"),
+    FPS = (typeof(setfpscap) == "function"),
+    Proximity = (typeof(fireproximityprompt) == "function"),
+}
+
+local executorName = (identifyexecutor and identifyexecutor() or "Unknown"):lower()
+local isXeno = string.find(executorName, "xeno") ~= nil
+local LimitedExecutors = {"xeno"}
+local isLimitedExecutor = false
+for _, name in ipairs(LimitedExecutors) do
+    if string.find(executorName, name) then
+        isLimitedExecutor = true
+        break
+    end
+end
+
+-- ══════════════════════════════════════════════
+--  RAYFIELD LOAD
+-- ══════════════════════════════════════════════
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+-- ══════════════════════════════════════════════
+--  SAVE/LOAD (simple flag-based replacement for SaveManager)
+-- ══════════════════════════════════════════════
+local SaveData = {}
+
+local function SaveFlag(key, value)
+    SaveData[key] = value
+end
+local function LoadFlag(key, default)
+    return SaveData[key] ~= nil and SaveData[key] or default
+end
+
+-- ══════════════════════════════════════════════
+--  SHARED STATE  (identical to original)
+-- ══════════════════════════════════════════════
+getgenv().FourHub_Running = true
+
+local Toggles = {}
+local Options  = {}
+
+local omg = { 123035506495251, 140307747257396 }
+local fire = {
+    "https://i.ibb.co/1GrxgL38/avatar-736x736.jpg",
+    "https://i.ibb.co/r23dDV0Y/avatar-1200x1200.jpg",
+}
+
+local PriorityTasks  = {"Boss","Pity Boss","Summon [Other]","Summon","Level Farm","All Mob Farm","Mob","Merchant","Alt Help"}
+local DefaultPriority = {"Boss","Pity Boss","Summon [Other]","Summon","Level Farm","All Mob Farm","Mob","Merchant","Alt Help"}
+local TargetGroupId  = 1002185259
+local BannedRanks    = {255,254,175,150}
+local NewItemsBuffer = {}
+
+local Shared = {
+    GlobalPrio = "FARM",
+    Cached = { Inv = {}, Accessories = {}, RawWeapCache = {Sword={},Melee={}} },
+    Farm = true, Recovering = false, MovingIsland = false,
+    Island = "", Target = nil, KillTick = 0, TargetValid = false,
+    QuestNPC = "", MobIdx = 1, AllMobIdx = 1, WeapRotationIdx = 1,
+    ComboIdx = 1, ParsedCombo = {}, RawWeapCache = {Sword={},Melee={}},
+    ActiveWeap = "", ArmHaki = false, BossTIMap = {},
+    InventorySynced = false, Stats = {}, Settings = {}, GemStats = {},
+    SkillTree = {Nodes={},Points=0}, Passives = {}, SpecStatsSlider = {},
+    ArtifactSession = {Inventory={},Dust=0,InvCount=0},
+    UpBlacklist = {}, MerchantBusy = false, LocalMerchantTime = 0,
+    LastTimerTick = tick(), MerchantExecute = false, FirstMerchantSync = false,
+    CurrentStock = {}, LastM1 = 0, LastWRSwitch = 0,
+    LastSwitch = {Title="",Rune=""}, LastBuildSwitch = 0, LastDungeon = 0,
+    AltDamage = {}, AltActive = false, TradeState = {},
+}
+
+local Script_Start_Time = os.time()
+local StartStats = {
+    Level  = Plr.Data.Level.Value,
+    Money  = Plr.Data.Money.Value,
+    Gems   = Plr.Data.Gems.Value,
+    Bounty = (Plr:FindFirstChild("leaderstats") and Plr.leaderstats:FindFirstChild("Bounty") and Plr.leaderstats.Bounty.Value) or 0,
+}
+
+-- ══════════════════════════════════════════════
+--  HELPER UTILITIES  (all original, unchanged)
+-- ══════════════════════════════════════════════
+local function GetSessionTime()
+    local seconds = os.time() - Script_Start_Time
+    local hours = math.floor(seconds/3600)
+    local mins  = math.floor((seconds%3600)/60)
+    return string.format("%dh %02dm", hours, mins)
+end
+
+local function GetSafeModule(parent, name)
+    local obj = parent:FindFirstChild(name)
+    if obj and obj:IsA("ModuleScript") then
+        local ok, res = pcall(require, obj)
+        if ok then return res end
+    end
+    return nil
+end
+
+local function GetRemote(parent, pathString)
+    local current = parent
+    for _, name in ipairs(pathString:split(".")) do
+        if not current then return nil end
+        current = current:FindFirstChild(name)
+    end
+    return current
+end
+
+local function SafeInvoke(remote, ...)
+    local args, result = {...}, nil
+    task.spawn(function()
+        local ok, res = pcall(function() return remote:InvokeServer(unpack(args)) end)
+        result = res
+    end)
+    local start = tick()
+    repeat task.wait() until result ~= nil or (tick()-start) > 2
+    return result
+end
+
+local function fire_event(signal, ...)
+    if firesignal then return firesignal(signal, ...) end
+    if getconnections then
+        for _, c in ipairs(getconnections(signal)) do
+            if c.Function then task.spawn(c.Function, ...) end
+        end
+    end
+end
+
+local function GetCharacter()
+    return Plr.Character
+end
+
+local function CommaFormat(n)
+    local s = tostring(math.floor(n))
+    return s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,","")
+end
+
+local function Abbreviate(n)
+    n = tonumber(n) or 0
+    if n >= 1e12 then return string.format("%.2fT", n/1e12)
+    elseif n >= 1e9 then return string.format("%.2fB", n/1e9)
+    elseif n >= 1e6 then return string.format("%.2fM", n/1e6)
+    elseif n >= 1e3 then return string.format("%.2fK", n/1e3)
+    else return tostring(n) end
+end
+
+local function Clean(str) return str:gsub("%s+",""):lower() end
+
+local function Thread(name, func, state)
+    if state then task.spawn(func)
+    end
+end
+
+local function SafeLoop(label, func)
+    return function()
+        local ok, err = pcall(func)
+        if not ok then warn("[SafeLoop:"..label.."] "..tostring(err)) end
+    end
+end
+
+-- ══════════════════════════════════════════════
+--  REMOTES & MODULES  (identical to original)
+-- ══════════════════════════════════════════════
+local _DR = GetRemote(RS, "RemoteEvents.DashRemote")
+local _FS = (_DR and _DR.FireServer)
+
+local Remotes = {
+    SettingsToggle = GetRemote(RS,"RemoteEvents.SettingsToggle"),
+    SettingsSync   = GetRemote(RS,"RemoteEvents.SettingsSync"),
+    UseCode        = GetRemote(RS,"RemoteEvents.CodeRedeem"),
+    M1             = GetRemote(RS,"CombatSystem.Remotes.RequestHit"),
+    EquipWeapon    = GetRemote(RS,"Remotes.EquipWeapon"),
+    UseSkill       = GetRemote(RS,"AbilitySystem.Remotes.RequestAbility"),
+    UseFruit       = GetRemote(RS,"RemoteEvents.FruitPowerRemote"),
+    QuestAccept    = GetRemote(RS,"RemoteEvents.QuestAccept"),
+    QuestAbandon   = GetRemote(RS,"RemoteEvents.QuestAbandon"),
+    UseItem        = GetRemote(RS,"Remotes.UseItem"),
+    SlimeCraft     = GetRemote(RS,"Remotes.RequestSlimeCraft"),
+    GrailCraft     = GetRemote(RS,"Remotes.RequestGrailCraft"),
+    RerollSingleStat = GetRemote(RS,"Remotes.RerollSingleStat"),
+    SkillTreeUpgrade = GetRemote(RS,"RemoteEvents.SkillTreeUpgrade"),
+    Enchant        = GetRemote(RS,"Remotes.EnchantAccessory"),
+    Blessing       = GetRemote(RS,"Remotes.BlessWeapon"),
+    ArtifactSync   = GetRemote(RS,"RemoteEvents.ArtifactDataSync"),
+    ArtifactClaim  = GetRemote(RS,"RemoteEvents.ArtifactMilestoneClaimReward"),
+    MassDelete     = GetRemote(RS,"RemoteEvents.ArtifactMassDeleteByUUIDs"),
+    MassUpgrade    = GetRemote(RS,"RemoteEvents.ArtifactMassUpgrade"),
+    ArtifactLock   = GetRemote(RS,"RemoteEvents.ArtifactLock"),
+    ArtifactUnequip= GetRemote(RS,"RemoteEvents.ArtifactUnequip"),
+    ArtifactEquip  = GetRemote(RS,"RemoteEvents.ArtifactEquip"),
+    Roll_Trait     = GetRemote(RS,"RemoteEvents.TraitReroll"),
+    TraitAutoSkip  = GetRemote(RS,"RemoteEvents.TraitUpdateAutoSkip"),
+    TraitConfirm   = GetRemote(RS,"RemoteEvents.TraitConfirm"),
+    SpecPassiveReroll = GetRemote(RS,"RemoteEvents.SpecPassiveReroll"),
+    ArmHaki        = GetRemote(RS,"RemoteEvents.HakiRemote"),
+    ObserHaki      = GetRemote(RS,"RemoteEvents.ObservationHakiRemote"),
+    ConquerorHaki  = GetRemote(RS,"Remotes.ConquerorHakiRemote"),
+    TP_Portal      = GetRemote(RS,"Remotes.TeleportToPortal"),
+    OpenDungeon    = GetRemote(RS,"Remotes.RequestDungeonPortal"),
+    DungeonWaveVote= GetRemote(RS,"Remotes.DungeonWaveVote"),
+    EquipTitle     = GetRemote(RS,"RemoteEvents.TitleEquip"),
+    TitleUnequip   = GetRemote(RS,"RemoteEvents.TitleUnequip"),
+    EquipRune      = GetRemote(RS,"Remotes.EquipRune"),
+    LoadoutLoad    = GetRemote(RS,"RemoteEvents.LoadoutLoad"),
+    AddStat        = GetRemote(RS,"RemoteEvents.AllocateStat"),
+    OpenMerchant   = GetRemote(RS,"Remotes.MerchantRemotes.OpenMerchantUI"),
+    MerchantBuy    = GetRemote(RS,"Remotes.MerchantRemotes.PurchaseMerchantItem"),
+    ValentineBuy   = GetRemote(RS,"Remotes.ValentineMerchantRemotes.PurchaseValentineMerchantItem"),
+    StockUpdate    = GetRemote(RS,"Remotes.MerchantRemotes.MerchantStockUpdate"),
+    SummonBoss     = GetRemote(RS,"Remotes.RequestSummonBoss"),
+    JJKSummonBoss  = GetRemote(RS,"Remotes.RequestSpawnStrongestBoss"),
+    RimuruBoss     = GetRemote(RS,"RemoteEvents.RequestSpawnRimuru"),
+    AnosBoss       = GetRemote(RS,"Remotes.RequestSpawnAnosBoss"),
+    TrueAizenBoss  = GetRemote(RS,"RemoteEvents.RequestSpawnTrueAizen"),
+    AtomicBoss     = GetRemote(RS,"RemoteEvents.RequestSpawnAtomic"),
+    ReqInventory   = GetRemote(RS,"Remotes.RequestInventory"),
+    Ascend         = GetRemote(RS,"RemoteEvents.RequestAscend"),
+    ReqAscend      = GetRemote(RS,"RemoteEvents.GetAscendData"),
+    CloseAscend    = GetRemote(RS,"RemoteEvents.CloseAscendUI"),
+    TradeRespond   = GetRemote(RS,"Remotes.TradeRemotes.RespondToRequest"),
+    TradeSend      = GetRemote(RS,"Remotes.TradeRemotes.SendTradeRequest"),
+    TradeAddItem   = GetRemote(RS,"Remotes.TradeRemotes.AddItemToTrade"),
+    TradeReady     = GetRemote(RS,"Remotes.TradeRemotes.SetReady"),
+    TradeConfirm   = GetRemote(RS,"Remotes.TradeRemotes.ConfirmTrade"),
+    TradeUpdated   = GetRemote(RS,"Remotes.TradeRemotes.TradeUpdated"),
+    HakiStateUpdate= GetRemote(RS,"RemoteEvents.HakiStateUpdate"),
+    UpCurrency     = GetRemote(RS,"RemoteEvents.UpdateCurrency"),
+    UpInventory    = GetRemote(RS,"Remotes.UpdateInventory"),
+    UpPlayerStats  = GetRemote(RS,"RemoteEvents.UpdatePlayerStats"),
+    UpAscend       = GetRemote(RS,"RemoteEvents.AscendDataUpdate"),
+    UpStatReroll   = GetRemote(RS,"RemoteEvents.StatRerollUpdate"),
+    SpecPassiveUpdate = GetRemote(RS,"RemoteEvents.SpecPassiveDataUpdate"),
+    SpecPassiveSkip = GetRemote(RS,"RemoteEvents.SpecPassiveUpdateAutoSkip"),
+    UpSkillTree    = GetRemote(RS,"RemoteEvents.SkillTreeUpdate"),
+    BossUIUpdate   = GetRemote(RS,"Remotes.BossUIUpdate"),
+    TitleSync      = GetRemote(RS,"RemoteEvents.TitleDataSync"),
+}
+
+local Modules = {
+    BossConfig    = GetSafeModule(RS.Modules,"BossConfig") or {Bosses={}},
+    TimedConfig   = GetSafeModule(RS.Modules,"TimedBossConfig"),
+    SummonConfig  = GetSafeModule(RS.Modules,"SummonableBossConfig"),
+    Merchant      = GetSafeModule(RS.Modules,"MerchantConfig") or {ITEMS={}},
+    ValentineConfig= GetSafeModule(RS.Modules,"ValentineMerchantConfig"),
+    DungeonMerchantConfig = GetSafeModule(RS.Modules,"DungeonMerchantConfig"),
+    InfiniteTowerMerchantConfig = GetSafeModule(RS.Modules,"InfiniteTowerMerchantConfig"),
+    BossRushMerchantConfig = GetSafeModule(RS.Modules,"BossRushMerchantConfig"),
+    Title         = GetSafeModule(RS.Modules,"TitlesConfig") or {},
+    Quests        = GetSafeModule(RS.Modules,"QuestConfig") or {RepeatableQuests={},Questlines={}},
+    WeaponClass   = GetSafeModule(RS.Modules,"WeaponClassification") or {Tools={}},
+    Fruits        = GetSafeModule(RS:FindFirstChild("FruitPowerSystem") or game,"FruitPowerConfig") or {Powers={}},
+    ArtifactConfig= GetSafeModule(RS.Modules,"ArtifactConfig"),
+    Stats         = GetSafeModule(RS.Modules,"StatRerollConfig"),
+    Codes         = GetSafeModule(RS,"CodesConfig") or {Codes={}},
+    ItemRarity    = GetSafeModule(RS.Modules,"ItemRarityConfig"),
+    Trait         = GetSafeModule(RS.Modules,"TraitConfig") or {Traits={}},
+    Race          = GetSafeModule(RS.Modules,"RaceConfig") or {Races={}},
+    Clan          = GetSafeModule(RS.Modules,"ClanConfig") or {Clans={}},
+    SpecPassive   = GetSafeModule(RS.Modules,"SpecPassiveConfig"),
+    SkillTree     = GetSafeModule(RS.Modules,"SkillTreeConfig"),
+    InfiniteTower = GetSafeModule(RS.Modules,"InfiniteTowerConfig"),
+}
+
+local PATH = {
+    Mobs        = workspace:WaitForChild("NPCs"),
+    InteractNPCs= workspace:WaitForChild("ServiceNPCs"),
+}
+
+local function GetServiceNPC(name)
+    return PATH.InteractNPCs:FindFirstChild(name)
+end
+
+local NPCs = {
+    Merchant = {
+        Regular      = GetServiceNPC("MerchantNPC"),
+        Dungeon      = GetServiceNPC("DungeonMerchantNPC"),
+        Valentine    = GetServiceNPC("ValentineMerchantNPC"),
+        InfiniteTower= GetServiceNPC("InfiniteTowerMerchantNPC"),
+        BossRush     = GetServiceNPC("BossRushMerchantNPC"),
+    }
+}
+
+local UI = {
+    Merchant = {
+        Regular      = PGui:WaitForChild("MerchantUI"),
+        Dungeon      = PGui:WaitForChild("DungeonMerchantUI"),
+        Valentine    = PGui:FindFirstChild("ValentineMerchantUI"),
+        InfiniteTower= PGui:FindFirstChild("InfiniteTowerMerchantUI"),
+        BossRush     = PGui:FindFirstChild("BossRushMerchantUI"),
+    }
+}
+
+local pingUI = PGui:WaitForChild("QuestPingUI")
+local SummonMap = {}
+
+-- ══════════════════════════════════════════════
+--  ISLAND CRYSTALS, TABLES, etc.  (original, unchanged)
+-- ══════════════════════════════════════════════
+local IslandCrystals = {
+    ["Starter"]    = workspace:FindFirstChild("StarterIsland") and workspace.StarterIsland:FindFirstChild("SpawnPointCrystal_Starter"),
+    ["Jungle"]     = workspace:FindFirstChild("JungleIsland") and workspace.JungleIsland:FindFirstChild("SpawnPointCrystal_Jungle"),
+    ["Desert"]     = workspace:FindFirstChild("DesertIsland") and workspace.DesertIsland:FindFirstChild("SpawnPointCrystal_Desert"),
+    ["Snow"]       = workspace:FindFirstChild("SnowIsland") and workspace.SnowIsland:FindFirstChild("SpawnPointCrystal_Snow"),
+    ["Sailor"]     = workspace:FindFirstChild("SailorIsland") and workspace.SailorIsland:FindFirstChild("SpawnPointCrystal_Sailor"),
+    ["Shibuya"]    = workspace:FindFirstChild("ShibuyaStation") and workspace.ShibuyaStation:FindFirstChild("SpawnPointCrystal_Shibuya"),
+    ["HuecoMundo"] = workspace:FindFirstChild("HuecoMundo") and workspace.HuecoMundo:FindFirstChild("SpawnPointCrystal_HuecoMundo"),
+    ["Boss"]       = workspace:FindFirstChild("BossIsland") and workspace.BossIsland:FindFirstChild("SpawnPointCrystal_Boss"),
+    ["Dungeon"]    = workspace:FindFirstChild("Main Temple") and workspace["Main Temple"]:FindFirstChild("SpawnPointCrystal_Dungeon"),
+    ["Shinjuku"]   = workspace:FindFirstChild("ShinjukuIsland") and workspace.ShinjukuIsland:FindFirstChild("SpawnPointCrystal_Shinjuku"),
+    ["Valentine"]  = workspace:FindFirstChild("ValentineIsland") and workspace.ValentineIsland:FindFirstChild("SpawnPointCrystal_Valentine"),
+    ["Slime"]      = workspace:FindFirstChild("SlimeIsland") and workspace.SlimeIsland:FindFirstChild("SpawnPointCrystal_Slime"),
+    ["Academy"]    = workspace:FindFirstChild("AcademyIsland") and workspace.AcademyIsland:FindFirstChild("SpawnPointCrystal_Academy"),
+    ["Judgement"]  = workspace:FindFirstChild("JudgementIsland") and workspace.JudgementIsland:FindFirstChild("SpawnPointCrystal_Judgement"),
+    ["SoulDominion"]= workspace:FindFirstChild("SoulDominionIsland") and workspace.SoulDominionIsland:FindFirstChild("SpawnPointCrystal_SoulDominion"),
+    ["NinjaIsland"]= workspace:FindFirstChild("NinjaIsland") and workspace.NinjaIsland:FindFirstChild("SpawnPointCrystal_Ninja"),
+    ["LawlessIsland"]= workspace:FindFirstChild("LawlessIsland") and workspace.LawlessIsland:FindFirstChild("SpawnPointCrystal_Lawless"),
+}
+
+-- (All original helper / game logic functions are preserved below unchanged)
+-- They do not reference UI library calls so they work with any UI.
+
+local Connections = {}
+local Flags = {}
+
+-- ════════════════════════════════════════════════════════════════
+--  RAYFIELD WINDOW + TABS
+-- ════════════════════════════════════════════════════════════════
+local Window = Rayfield:CreateWindow({
+    Name            = "NixHub | " .. assetName,
+    Icon            = 0,
+    LoadingTitle    = "NixHub",
+    LoadingSubtitle = "FourHub | Sailor Piece — v1.0",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "FourHub",
+        FileName   = "SailorPiece",
+    },
+    KeySystem = false,
+})
+
+-- ── TABS ─────────────────────────────────────
+local Tab = {
+    Information = Window:CreateTab("Information", "info"),
+    Priority    = Window:CreateTab("Priority",    "list-ordered"),
+    Main        = Window:CreateTab("Main",        "swords"),
+    Automation  = Window:CreateTab("Automation",  "repeat-2"),
+    Artifact    = Window:CreateTab("Artifact",    "gem"),
+    Dungeon     = Window:CreateTab("Dungeon",     "door-open"),
+    Player      = Window:CreateTab("Player",      "user"),
+    Teleport    = Window:CreateTab("Teleport",    "map-pin"),
+    Webhook     = Window:CreateTab("Webhook",     "send"),
+    Misc        = Window:CreateTab("Misc",        "package"),
+    Config      = Window:CreateTab("Config",      "settings"),
+}
+
+-- ════════════════════════════════════════════════════════════════
+--  INFORMATION TAB
+-- ════════════════════════════════════════════════════════════════
+local InfoSection = Tab.Information:CreateSection("User Info")
+
+local executorDisplayName = (identifyexecutor and identifyexecutor() or "Unknown")
+local statusText  = isLimitedExecutor and "Semi-Working" or "Working"
+
+Tab.Information:CreateLabel("Executor: " .. executorDisplayName .. "  |  Status: " .. statusText)
+Tab.Information:CreateLabel("Version: 1.0  |  Game: " .. assetName)
+
+local GameSection = Tab.Information:CreateSection("Game")
+
+Tab.Information:CreateButton({
+    Name     = "Redeem All Codes",
+    Callback = function()
+        local allCodes   = Modules.Codes.Codes
+        local playerLevel= Plr.Data.Level.Value
+        for codeName, data in pairs(allCodes) do
+            if playerLevel >= (data.LevelReq or 0) then
+                Rayfield:Notify({ Title="Code", Content="Redeeming: "..codeName, Duration=3 })
+                Remotes.UseCode:InvokeServer(codeName)
+                task.wait(2)
+            end
+        end
+    end,
+})
+
+Tab.Information:CreateButton({
+    Name     = "Copy Discord Invite",
+    Callback = function()
+        if Support.Clipboard then
+            setclipboard("https://discord.gg/Bb7BEsYDM7")
+            Rayfield:Notify({ Title="Copied!", Content="Discord link copied to clipboard.", Duration=3 })
+        end
+    end,
+})
+
+-- ════════════════════════════════════════════════════════════════
+--  PRIORITY TAB
+-- ════════════════════════════════════════════════════════════════
+local PrioSection = Tab.Priority:CreateSection("Farm Priority Order")
+Tab.Priority:CreateLabel("Set the order in which farm tasks are prioritised. (Priority 1 = highest)")
+
+for i = 1, #PriorityTasks do
+    Options["SelectedPriority_"..i] = { Value = DefaultPriority[i] }
+    Tab.Priority:CreateDropdown({
+        Name    = "Priority " .. i,
+        Options = PriorityTasks,
+        CurrentOption = {DefaultPriority[i]},
+        Flag    = "SelectedPriority_"..i,
+        Callback= function(val)
+            Options["SelectedPriority_"..i].Value = val
+        end,
+    })
+end
+
+-- ════════════════════════════════════════════════════════════════
+--  MAIN TAB  (Autofarm, Boss, Haki, Skill, Combo, Switch)
+-- ════════════════════════════════════════════════════════════════
+
+-- ── Autofarm ─────────────────────────────────
+local MobSection  = Tab.Main:CreateSection("Mob Farm")
+
+Options.SelectedMob = { Value = {} }
+Tab.Main:CreateDropdown({
+    Name          = "Select Mob(s)",
+    Options       = {},   -- populated later by UpdateNPCLists
+    CurrentOption = {},
+    MultipleOptions = true,
+    Flag          = "SelectedMob",
+    Callback      = function(val) Options.SelectedMob.Value = val end,
+})
+
+Tab.Main:CreateButton({ Name = "Refresh Mob List", Callback = function() UpdateNPCLists() end })
+
+Toggles.MobFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name     = "Autofarm Selected Mob",
+    CurrentValue = false,
+    Flag     = "MobFarm",
+    Callback = function(val) Toggles.MobFarm.Value = val end,
+})
+
+Toggles.AllMobFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name     = "Autofarm All Mobs",
+    CurrentValue = false,
+    Flag     = "AllMobFarm",
+    Callback = function(val) Toggles.AllMobFarm.Value = val end,
+})
+
+Options.AllMobType = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name    = "All Mob Type",
+    Options = {"Normal","Fast"},
+    CurrentOption = {"Normal"},
+    Flag    = "AllMobType",
+    Callback= function(val) Options.AllMobType.Value = val end,
+})
+
+Toggles.LevelFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name     = "Autofarm Level",
+    CurrentValue = false,
+    Flag     = "LevelFarm",
+    Callback = function(val)
+        Toggles.LevelFarm.Value = val
+        if not val then Shared.QuestNPC = "" end
+    end,
+})
+
+-- ── Boss Farm ────────────────────────────────
+local BossSection = Tab.Main:CreateSection("Boss Farm")
+
+Options.SelectedBosses = { Value = {} }
+Tab.Main:CreateDropdown({
+    Name    = "Select Boss(es)",
+    Options = {},
+    CurrentOption = {},
+    MultipleOptions = true,
+    Flag    = "SelectedBosses",
+    Callback= function(val) Options.SelectedBosses.Value = val end,
+})
+
+Toggles.BossesFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Autofarm Selected Boss", CurrentValue = false, Flag = "BossesFarm",
+    Callback = function(val) Toggles.BossesFarm.Value = val end,
+})
+
+Toggles.AllBossesFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Autofarm All Bosses", CurrentValue = false, Flag = "AllBossesFarm",
+    Callback = function(val) Toggles.AllBossesFarm.Value = val end,
+})
+
+Options.SelectedSummon = { Value = nil }
+Tab.Main:CreateDropdown({
+    Name = "Select Summon Boss", Options = {}, CurrentOption = {}, Flag = "SelectedSummon",
+    Callback = function(val) Options.SelectedSummon.Value = val end,
+})
+
+Options.SelectedSummonDiff = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name = "Summon Difficulty", Options = {"Normal","Hard","Extreme"}, CurrentOption = {"Normal"},
+    Flag = "SelectedSummonDiff",
+    Callback = function(val) Options.SelectedSummonDiff.Value = val end,
+})
+
+Toggles.AutoSummon = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Summon", CurrentValue = false, Flag = "AutoSummon",
+    Callback = function(val) Toggles.AutoSummon.Value = val end,
+})
+
+Toggles.SummonBossFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Autofarm Summon Boss", CurrentValue = false, Flag = "SummonBossFarm",
+    Callback = function(val) Toggles.SummonBossFarm.Value = val end,
+})
+
+-- Pity Boss
+local PitySection = Tab.Main:CreateSection("Pity Boss")
+
+Options.SelectedBuildPity = { Value = {} }
+Tab.Main:CreateDropdown({
+    Name = "Boss [Build Pity]", Options = {}, CurrentOption = {}, MultipleOptions = true,
+    Flag = "SelectedBuildPity",
+    Callback = function(val) Options.SelectedBuildPity.Value = val end,
+})
+
+Options.SelectedUsePity = { Value = nil }
+Tab.Main:CreateDropdown({
+    Name = "Boss [Use Pity]", Options = {}, CurrentOption = {}, Flag = "SelectedUsePity",
+    Callback = function(val) Options.SelectedUsePity.Value = val end,
+})
+
+Options.SelectedPityDiff = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name = "Pity Difficulty", Options = {"Normal","Hard","Extreme"}, CurrentOption = {"Normal"},
+    Flag = "SelectedPityDiff",
+    Callback = function(val) Options.SelectedPityDiff.Value = val end,
+})
+
+Toggles.PityBossFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Autofarm Pity Boss", CurrentValue = false, Flag = "PityBossFarm",
+    Callback = function(val) Toggles.PityBossFarm.Value = val end,
+})
+
+-- Other Summon
+Options.SelectedOtherSummon = { Value = nil }
+Tab.Main:CreateDropdown({
+    Name = "Summon Boss (Other)", Options = {}, CurrentOption = {}, Flag = "SelectedOtherSummon",
+    Callback = function(val) Options.SelectedOtherSummon.Value = val end,
+})
+
+Options.SelectedOtherSummonDiff = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name = "Other Summon Difficulty", Options = {"Normal","Hard","Extreme"}, CurrentOption = {"Normal"},
+    Flag = "SelectedOtherSummonDiff",
+    Callback = function(val) Options.SelectedOtherSummonDiff.Value = val end,
+})
+
+Toggles.AutoOtherSummon = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Summon (Other)", CurrentValue = false, Flag = "AutoOtherSummon",
+    Callback = function(val) Toggles.AutoOtherSummon.Value = val end,
+})
+
+Toggles.OtherSummonFarm = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Autofarm Other Summon Boss", CurrentValue = false, Flag = "OtherSummonFarm",
+    Callback = function(val) Toggles.OtherSummonFarm.Value = val end,
+})
+
+-- ── Farm Config ──────────────────────────────
+local FarmConfigSection = Tab.Main:CreateSection("Farm Config")
+
+Options.SelectedWeaponType = { Value = {} }
+Tab.Main:CreateDropdown({
+    Name = "Weapon Type", Options = {"Sword","Melee","Power"}, CurrentOption = {}, MultipleOptions = true,
+    Flag = "SelectedWeaponType",
+    Callback = function(val) Options.SelectedWeaponType.Value = val end,
+})
+
+Options.SwitchWeaponCD = { Value = 4 }
+Tab.Main:CreateSlider({
+    Name = "Switch Weapon Delay (s)", Range = {1,20}, Increment = 1, CurrentValue = 4,
+    Flag = "SwitchWeaponCD",
+    Callback = function(val) Options.SwitchWeaponCD.Value = val end,
+})
+
+Toggles.SwitchWeapon = { Value = true }
+Tab.Main:CreateToggle({
+    Name = "Auto Switch Weapon", CurrentValue = true, Flag = "SwitchWeapon",
+    Callback = function(val) Toggles.SwitchWeapon.Value = val end,
+})
+
+Toggles.IslandTP = { Value = true }
+Tab.Main:CreateToggle({
+    Name = "Island TP (Autofarm)", CurrentValue = true, Flag = "IslandTP",
+    Callback = function(val) Toggles.IslandTP.Value = val end,
+})
+
+Options.IslandTPCD = { Value = 0.67 }
+Tab.Main:CreateSlider({
+    Name = "Island TP Cooldown", Range = {0,250}, Increment = 1, CurrentValue = 67,
+    Flag = "IslandTPCD",
+    Callback = function(val) Options.IslandTPCD.Value = val/100 end,
+})
+
+Options.TargetTPCD = { Value = 0 }
+Tab.Main:CreateSlider({
+    Name = "Target TP Cooldown", Range = {0,500}, Increment = 1, CurrentValue = 0,
+    Flag = "TargetTPCD",
+    Callback = function(val) Options.TargetTPCD.Value = val/100 end,
+})
+
+Options.TargetDistTP = { Value = 0 }
+Tab.Main:CreateSlider({
+    Name = "Target Distance TP (Tween)", Range = {0,100}, Increment = 1, CurrentValue = 0,
+    Flag = "TargetDistTP",
+    Callback = function(val) Options.TargetDistTP.Value = val end,
+})
+
+Options.M1Speed = { Value = 0 }
+Tab.Main:CreateSlider({
+    Name = "M1 Attack Cooldown", Range = {0,100}, Increment = 1, CurrentValue = 0,
+    Flag = "M1Speed",
+    Callback = function(val) Options.M1Speed.Value = val/100 end,
+})
+
+Options.SelectedMovementType = { Value = "Tween" }
+Tab.Main:CreateDropdown({
+    Name = "Movement Type", Options = {"Teleport","Tween"}, CurrentOption = {"Tween"},
+    Flag = "SelectedMovementType",
+    Callback = function(val) Options.SelectedMovementType.Value = val end,
+})
+
+Options.SelectedFarmType = { Value = "Behind" }
+Tab.Main:CreateDropdown({
+    Name = "Farm Type", Options = {"Behind","Above","Below"}, CurrentOption = {"Behind"},
+    Flag = "SelectedFarmType",
+    Callback = function(val) Options.SelectedFarmType.Value = val end,
+})
+
+Options.Distance = { Value = 12 }
+Tab.Main:CreateSlider({
+    Name = "Farm Distance", Range = {0,30}, Increment = 1, CurrentValue = 12,
+    Flag = "Distance",
+    Callback = function(val) Options.Distance.Value = val end,
+})
+
+Options.TweenSpeed = { Value = 160 }
+Tab.Main:CreateSlider({
+    Name = "Tween Speed", Range = {0,500}, Increment = 1, CurrentValue = 160,
+    Flag = "TweenSpeed",
+    Callback = function(val) Options.TweenSpeed.Value = val end,
+})
+
+Toggles.InstaKill = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Instant Kill", CurrentValue = false, Flag = "InstaKill",
+    Callback = function(val) Toggles.InstaKill.Value = val end,
+})
+
+Options.InstaKillType = { Value = "V1" }
+Tab.Main:CreateDropdown({
+    Name = "Instant Kill Type", Options = {"V1","V2"}, CurrentOption = {"V1"},
+    Flag = "InstaKillType",
+    Callback = function(val) Options.InstaKillType.Value = val end,
+})
+
+Options.InstaKillHP = { Value = 90 }
+Tab.Main:CreateSlider({
+    Name = "Insta-Kill HP%", Range = {1,100}, Increment = 1, CurrentValue = 90,
+    Flag = "InstaKillHP",
+    Callback = function(val) Options.InstaKillHP.Value = val end,
+})
+
+Options.InstaKillMinHP = { Value = "100000" }
+Tab.Main:CreateInput({
+    Name = "Min MaxHP for Insta-Kill", PlaceholderText = "100000",
+    RemoveTextAfterFocusLost = false, Flag = "InstaKillMinHP",
+    Callback = function(val) Options.InstaKillMinHP.Value = val end,
+})
+
+-- ── Haki ─────────────────────────────────────
+local HakiSection = Tab.Main:CreateSection("Haki")
+
+Toggles.ObserHaki = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Observation Haki", CurrentValue = false, Flag = "ObserHaki",
+    Callback = function(val)
+        Toggles.ObserHaki.Value = val
+        Thread("AutoHaki", Func_AutoHaki, val)
+    end,
+})
+
+Toggles.ArmHaki = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Armament Haki", CurrentValue = false, Flag = "ArmHaki",
+    Callback = function(val)
+        Toggles.ArmHaki.Value = val
+        Thread("AutoHaki", Func_AutoHaki, val)
+    end,
+})
+
+Toggles.ConquerorHaki = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Conqueror Haki", CurrentValue = false, Flag = "ConquerorHaki",
+    Callback = function(val)
+        Toggles.ConquerorHaki.Value = val
+        Thread("AutoHaki", Func_AutoHaki, val)
+    end,
+})
+
+Toggles.OnlyTarget = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Target Only (Haki/Skill)", CurrentValue = false, Flag = "OnlyTarget",
+    Callback = function(val) Toggles.OnlyTarget.Value = val end,
+})
+
+-- ── Skill ─────────────────────────────────────
+local SkillSection = Tab.Main:CreateSection("Auto Skill")
+
+Tab.Main:CreateLabel("Autofarm already has auto-M1 built in. Only enable separately if needed.")
+
+Toggles.AutoM1 = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Attack (M1)", CurrentValue = false, Flag = "AutoM1",
+    Callback = function(val)
+        Toggles.AutoM1.Value = val
+        Thread("AutoM1", SafeLoop("Auto M1", Func_AutoM1), val)
+    end,
+})
+
+Toggles.KillAura = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Kill Aura", CurrentValue = false, Flag = "KillAura",
+    Callback = function(val)
+        Toggles.KillAura.Value = val
+        Thread("KillAura", Func_KillAura, val)
+    end,
+})
+
+Options.KillAuraCD = { Value = 0.1 }
+Tab.Main:CreateSlider({
+    Name = "Kill Aura CD", Range = {10,100}, Increment = 1, CurrentValue = 10,
+    Flag = "KillAuraCD",
+    Callback = function(val) Options.KillAuraCD.Value = val/100 end,
+})
+
+Options.KillAuraRange = { Value = 200 }
+Tab.Main:CreateSlider({
+    Name = "Kill Aura Range", Range = {0,200}, Increment = 1, CurrentValue = 200,
+    Flag = "KillAuraRange",
+    Callback = function(val) Options.KillAuraRange.Value = val end,
+})
+
+Options.SelectedSkills = { Value = {} }
+Tab.Main:CreateDropdown({
+    Name = "Select Skills", Options = {"Z","X","C","V","F"}, CurrentOption = {},
+    MultipleOptions = true, Flag = "SelectedSkills",
+    Callback = function(val) Options.SelectedSkills.Value = val end,
+})
+
+Options.AutoSkillType = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name = "Skill Mode", Options = {"Normal","Instant"}, CurrentOption = {"Normal"},
+    Flag = "AutoSkillType",
+    Callback = function(val) Options.AutoSkillType.Value = val end,
+})
+
+Toggles.AutoSkill_BossOnly = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Use On Boss Only", CurrentValue = false, Flag = "AutoSkill_BossOnly",
+    Callback = function(val) Toggles.AutoSkill_BossOnly.Value = val end,
+})
+
+Options.AutoSkill_BossHP = { Value = 100 }
+Tab.Main:CreateSlider({
+    Name = "Boss HP% Threshold", Range = {1,100}, Increment = 1, CurrentValue = 100,
+    Flag = "AutoSkill_BossHP",
+    Callback = function(val) Options.AutoSkill_BossHP.Value = val end,
+})
+
+Toggles.AutoSkill = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Use Skills", CurrentValue = false, Flag = "AutoSkill",
+    Callback = function(val)
+        Toggles.AutoSkill.Value = val
+        Thread("AutoSkill", Func_AutoSkill, val)
+    end,
+})
+
+-- ── Combo ─────────────────────────────────────
+local ComboSection = Tab.Main:CreateSection("Auto Combo")
+
+Tab.Main:CreateLabel("Example: Z > X > C > 0.5 > V   or   Z, X, C, 0.5, V")
+
+Options.ComboPattern = { Value = "Z > X > C > V > F" }
+Tab.Main:CreateInput({
+    Name = "Combo Pattern", PlaceholderText = "Z > X > C > V > F",
+    RemoveTextAfterFocusLost = false, Flag = "ComboPattern",
+    Callback = function(val) Options.ComboPattern.Value = val end,
+})
+
+Options.ComboMode = { Value = "Normal" }
+Tab.Main:CreateDropdown({
+    Name = "Combo Mode", Options = {"Normal","Instant"}, CurrentOption = {"Normal"},
+    Flag = "ComboMode",
+    Callback = function(val) Options.ComboMode.Value = val end,
+})
+
+Toggles.ComboBossOnly = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Boss Only (Combo)", CurrentValue = false, Flag = "ComboBossOnly",
+    Callback = function(val) Toggles.ComboBossOnly.Value = val end,
+})
+
+Toggles.AutoCombo = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Skill Combo", CurrentValue = false, Flag = "AutoCombo",
+    Callback = function(val)
+        Toggles.AutoCombo.Value = val
+        if val and Toggles.AutoSkill.Value then
+            Toggles.AutoSkill.Value = false
+            Rayfield:Notify({ Title="Notice", Content="Auto Skill disabled — Combo needs exclusive control.", Duration=4 })
+        end
+        Thread("AutoCombo", Func_AutoCombo, val)
+    end,
+})
+
+-- ── Auto Switch (Title / Rune / Build) ────────
+local SwitchSection = Tab.Main:CreateSection("Auto Switch")
+
+Toggles.AutoTitle = { Value = false }
+Tab.Main:CreateToggle({
+    Name = "Auto Switch Title", CurrentValue = false, Flag = "AutoTitle",
+    Callback = function(val)
+        Toggles.AutoTitle.Value = val
+        if val and #Tables.UnlockedTitle == 0 then Remotes.TitleUnequip:FireServer() end
+    end,
+})
+
+Options.DefaultTitle = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Default Title", Options={}, CurrentOption={}, Flag="DefaultTitle", Callback=function(v) Options.DefaultTitle.Value=v end })
+Options.Title_Mob   = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Title [Mob]", Options={}, CurrentOption={}, Flag="Title_Mob", Callback=function(v) Options.Title_Mob.Value=v end })
+Options.Title_Boss  = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Title [Boss]", Options={}, CurrentOption={}, Flag="Title_Boss", Callback=function(v) Options.Title_Boss.Value=v end })
+Options.Title_BossHP= { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Title [Boss HP%]", Options={}, CurrentOption={}, Flag="Title_BossHP", Callback=function(v) Options.Title_BossHP.Value=v end })
+Options.Title_Combo = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Title [Combo F Move]", Options={}, CurrentOption={}, Flag="Title_Combo", Callback=function(v) Options.Title_Combo.Value=v end })
+Options.Title_BossHPAmt = { Value = 15 }
+Tab.Main:CreateSlider({ Name="Change Until Boss HP%", Range={0,100}, Increment=1, CurrentValue=15, Flag="Title_BossHPAmt", Callback=function(v) Options.Title_BossHPAmt.Value=v end })
+
+Toggles.AutoRune = { Value = false }
+Tab.Main:CreateToggle({ Name="Auto Switch Rune", CurrentValue=false, Flag="AutoRune", Callback=function(v) Toggles.AutoRune.Value=v end })
+Options.DefaultRune = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Default Rune", Options={}, CurrentOption={}, Flag="DefaultRune", Callback=function(v) Options.DefaultRune.Value=v end })
+Options.Rune_Mob    = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Rune [Mob]", Options={}, CurrentOption={}, Flag="Rune_Mob", Callback=function(v) Options.Rune_Mob.Value=v end })
+Options.Rune_Boss   = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Rune [Boss]", Options={}, CurrentOption={}, Flag="Rune_Boss", Callback=function(v) Options.Rune_Boss.Value=v end })
+Options.Rune_BossHP = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Rune [Boss HP%]", Options={}, CurrentOption={}, Flag="Rune_BossHP", Callback=function(v) Options.Rune_BossHP.Value=v end })
+Options.Rune_Combo  = { Value = "None" }
+Tab.Main:CreateDropdown({ Name="Rune [Combo F Move]", Options={}, CurrentOption={}, Flag="Rune_Combo", Callback=function(v) Options.Rune_Combo.Value=v end })
+Options.Rune_BossHPAmt = { Value = 15 }
+Tab.Main:CreateSlider({ Name="Rune Change Until Boss HP%", Range={0,100}, Increment=1, CurrentValue=15, Flag="Rune_BossHPAmt", Callback=function(v) Options.Rune_BossHPAmt.Value=v end })
+
+-- ════════════════════════════════════════════════════════════════
+--  AUTOMATION TAB
+-- ════════════════════════════════════════════════════════════════
+local AscendSection = Tab.Automation:CreateSection("Ascend")
+
+Toggles.AutoAscend = { Value = false }
+Tab.Automation:CreateToggle({
+    Name = "Auto Ascend", CurrentValue = false, Flag = "AutoAscend",
+    Callback = function(val) Toggles.AutoAscend.Value = val end,
+})
+
+-- Rolls
+local RollsSection = Tab.Automation:CreateSection("Rolls")
+
+Tab.Automation:CreateLabel("Increase delay based on your ping. Low delay is not recommended.")
+
+Options.RollCD = { Value = 0.3 }
+Tab.Automation:CreateSlider({
+    Name = "Roll Delay", Range = {1,100}, Increment = 1, CurrentValue = 30,
+    Flag = "RollCD",
+    Callback = function(val) Options.RollCD.Value = val/100 end,
+})
+
+Options.SelectedTrait = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Trait(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedTrait", Callback=function(v) Options.SelectedTrait.Value=v end })
+
+Toggles.AutoTrait = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Roll Trait", CurrentValue=false, Flag="AutoTrait", Callback=function(v) Toggles.AutoTrait.Value=v end })
+
+Options.SelectedRace = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Race(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedRace", Callback=function(v) Options.SelectedRace.Value=v end })
+
+Toggles.AutoRace = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Roll Race", CurrentValue=false, Flag="AutoRace", Callback=function(v) Toggles.AutoRace.Value=v end })
+
+Options.SelectedClan = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Clan(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedClan", Callback=function(v) Options.SelectedClan.Value=v end })
+
+Toggles.AutoClan = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Roll Clan", CurrentValue=false, Flag="AutoClan", Callback=function(v) Toggles.AutoClan.Value=v end })
+
+-- Trade
+local TradeSection = Tab.Automation:CreateSection("Trade")
+
+Options.SelectedTradePlr = { Value = nil }
+Tab.Automation:CreateDropdown({ Name="Select Player", Options={}, CurrentOption={}, Flag="SelectedTradePlr", Callback=function(v) Options.SelectedTradePlr.Value=v end })
+
+Options.SelectedTradeItems = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedTradeItems", Callback=function(v) Options.SelectedTradeItems.Value=v end })
+
+Toggles.ReqTrade = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Send Request", CurrentValue=false, Flag="ReqTrade", Callback=function(v) Toggles.ReqTrade.Value=v end })
+
+Toggles.ReqTradeAccept = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Accept Request", CurrentValue=false, Flag="ReqTradeAccept", Callback=function(v) Toggles.ReqTradeAccept.Value=v end })
+
+Toggles.AutoAccept = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Accept Trade", CurrentValue=false, Flag="AutoAccept", Callback=function(v) Toggles.AutoAccept.Value=v end })
+
+-- Stats / Gem
+local StatsSection = Tab.Automation:CreateSection("Stats & Gems")
+
+Options.SelectedStats = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Stat(s)", Options={"Melee","Defense","Sword","Power"}, CurrentOption={}, MultipleOptions=true, Flag="SelectedStats", Callback=function(v) Options.SelectedStats.Value=v end })
+
+Toggles.AutoStats = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto UP Stats", CurrentValue=false, Flag="AutoStats", Callback=function(v) Toggles.AutoStats.Value=v end })
+
+Tab.Automation:CreateLabel("Reroll once for Gem reroll to work.")
+
+Options.SelectedGemStats = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Gem Stat(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedGemStats", Callback=function(v) Options.SelectedGemStats.Value=v end })
+
+Options.SelectedRank = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Rank(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedRank", Callback=function(v) Options.SelectedRank.Value=v end })
+
+Options.StatsRollCD = { Value = 0.1 }
+Tab.Automation:CreateSlider({ Name="Gem Roll Delay", Range={1,100}, Increment=1, CurrentValue=10, Flag="StatsRollCD", Callback=function(v) Options.StatsRollCD.Value=v/100 end })
+
+Toggles.AutoRollStats = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Roll Stats", CurrentValue=false, Flag="AutoRollStats", Callback=function(v) Toggles.AutoRollStats.Value=v end })
+
+Toggles.AutoSkillTree = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Skill Tree", CurrentValue=false, Flag="AutoSkillTree", Callback=function(v) Toggles.AutoSkillTree.Value=v end })
+
+Toggles.ArtifactMilestone = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Artifact Milestone", CurrentValue=false, Flag="ArtifactMilestone", Callback=function(v) Toggles.ArtifactMilestone.Value=v end })
+
+-- Enchant / Blessing
+local EnchantSection = Tab.Automation:CreateSection("Enchant & Blessing")
+
+Options.SelectedEnchant = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Accessory to Enchant", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedEnchant", Callback=function(v) Options.SelectedEnchant.Value=v end })
+
+Toggles.AutoEnchant = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Enchant", CurrentValue=false, Flag="AutoEnchant", Callback=function(v) Toggles.AutoEnchant.Value=v; Thread("AutoEnchant", SafeLoop("Enchant", function() AutoUpgradeLoop("Enchant") end), v) end })
+
+Toggles.AutoEnchantAll = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Enchant All", CurrentValue=false, Flag="AutoEnchantAll", Callback=function(v) Toggles.AutoEnchantAll.Value=v; Thread("AutoEnchantAll", SafeLoop("EnchantAll", function() AutoUpgradeLoop("Enchant") end), v) end })
+
+Options.SelectedBlessing = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Weapon to Bless", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedBlessing", Callback=function(v) Options.SelectedBlessing.Value=v end })
+
+Toggles.AutoBlessing = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Blessing", CurrentValue=false, Flag="AutoBlessing", Callback=function(v) Toggles.AutoBlessing.Value=v; Thread("AutoBlessing", SafeLoop("Blessing", function() AutoUpgradeLoop("Blessing") end), v) end })
+
+Toggles.AutoBlessingAll = { Value = false }
+Tab.Automation:CreateToggle({ Name="Auto Blessing All", CurrentValue=false, Flag="AutoBlessingAll", Callback=function(v) Toggles.AutoBlessingAll.Value=v; Thread("AutoBlessingAll", SafeLoop("BlessingAll", function() AutoUpgradeLoop("Blessing") end), v) end })
+
+-- Spec Passive
+local PassiveSection = Tab.Automation:CreateSection("Spec Passive")
+
+Options.SelectedPassive = { Value = {} }
+Tab.Automation:CreateDropdown({ Name="Select Weapon(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedPassive", Callback=function(v) Options.SelectedPassive.Value=v end })
+
+-- ════════════════════════════════════════════════════════════════
+--  ARTIFACT TAB
+-- ════════════════════════════════════════════════════════════════
+Tab.Artifact:CreateLabel("WARNING: These features are in heavy development. Use at your own risk.")
+
+local ArtLockSection = Tab.Artifact:CreateSection("Lock Rules")
+Options.Lock_Type = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Artifact Type", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Lock_Type", Callback=function(v) Options.Lock_Type.Value=v end })
+Options.Lock_Set  = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Artifact Set", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Lock_Set", Callback=function(v) Options.Lock_Set.Value=v end })
+Options.Lock_MS   = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Main Stat", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Lock_MS", Callback=function(v) Options.Lock_MS.Value=v end })
+Options.Lock_SS   = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Sub Stat", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Lock_SS", Callback=function(v) Options.Lock_SS.Value=v end })
+Options.Lock_MinSS = { Value = 0 }
+Tab.Artifact:CreateSlider({ Name="Min Sub Stats Count", Range={0,4}, Increment=1, CurrentValue=0, Flag="Lock_MinSS", Callback=function(v) Options.Lock_MinSS.Value=v end })
+
+Toggles.ArtifactLock = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Auto Lock", CurrentValue=false, Flag="ArtifactLock", Callback=function(v) Toggles.ArtifactLock.Value=v; Thread("Artifact.Lock", SafeLoop("ArtifactLogic", Func_ArtifactAutomation), v) end })
+
+local ArtDelSection = Tab.Artifact:CreateSection("Delete Rules")
+Options.Del_Type    = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Artifact Type", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Del_Type", Callback=function(v) Options.Del_Type.Value=v end })
+Options.Del_Set     = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Artifact Set", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Del_Set", Callback=function(v) Options.Del_Set.Value=v end })
+Options.Del_MS_Body = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Main Stat (Body)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Del_MS_Body", Callback=function(v) Options.Del_MS_Body.Value=v end })
+Options.Del_MS_Boots= { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Main Stat (Boots)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Del_MS_Boots", Callback=function(v) Options.Del_MS_Boots.Value=v end })
+Options.Del_SS      = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Sub Stat", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Del_SS", Callback=function(v) Options.Del_SS.Value=v end })
+Options.Del_MinSS   = { Value = 0 }
+Tab.Artifact:CreateSlider({ Name="Min Sub Stats to Delete", Range={0,4}, Increment=1, CurrentValue=0, Flag="Del_MinSS", Callback=function(v) Options.Del_MinSS.Value=v end })
+
+Toggles.ArtifactDelete = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Auto Delete", CurrentValue=false, Flag="ArtifactDelete", Callback=function(v) Toggles.ArtifactDelete.Value=v; Thread("Artifact.Delete", SafeLoop("ArtifactLogic", Func_ArtifactAutomation), v) end })
+
+Toggles.DeleteUnlock = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Auto Delete Unlocked", CurrentValue=false, Flag="DeleteUnlock", Callback=function(v) Toggles.DeleteUnlock.Value=v end })
+
+local ArtUpgradeSection = Tab.Artifact:CreateSection("Upgrade")
+Options.UpgradeLimit = { Value = 0 }
+Tab.Artifact:CreateSlider({ Name="Upgrade Limit", Range={0,15}, Increment=1, CurrentValue=0, Flag="UpgradeLimit", Callback=function(v) Options.UpgradeLimit.Value=v end })
+Options.Up_MS = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Main Stat Filter", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Up_MS", Callback=function(v) Options.Up_MS.Value=v end })
+
+Toggles.ArtifactUpgrade = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Auto Upgrade", CurrentValue=false, Flag="ArtifactUpgrade", Callback=function(v) Toggles.ArtifactUpgrade.Value=v; Thread("Artifact.Upgrade", SafeLoop("ArtifactLogic", Func_ArtifactAutomation), v) end })
+
+Toggles.UpgradeStage = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Upgrade in Stages", CurrentValue=false, Flag="UpgradeStage", Callback=function(v) Toggles.UpgradeStage.Value=v end })
+
+local ArtEquipSection = Tab.Artifact:CreateSection("Auto Equip")
+Options.Eq_Type = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Artifact Type", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Eq_Type", Callback=function(v) Options.Eq_Type.Value=v end })
+Options.Eq_MS   = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Main Stat", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Eq_MS", Callback=function(v) Options.Eq_MS.Value=v end })
+Options.Eq_SS   = { Value = {} }
+Tab.Artifact:CreateDropdown({ Name="Sub Stat", Options={}, CurrentOption={}, MultipleOptions=true, Flag="Eq_SS", Callback=function(v) Options.Eq_SS.Value=v end })
+
+Toggles.ArtifactEquip = { Value = false }
+Tab.Artifact:CreateToggle({ Name="Auto Equip", CurrentValue=false, Flag="ArtifactEquip", Callback=function(v) Toggles.ArtifactEquip.Value=v end })
+
+-- ════════════════════════════════════════════════════════════════
+--  DUNGEON TAB
+-- ════════════════════════════════════════════════════════════════
+Tab.Dungeon:CreateLabel("BossRush & Infinite Tower Supported.")
+
+local DungeonSection = Tab.Dungeon:CreateSection("Auto Dungeon")
+
+Options.SelectedDungeon = { Value = nil }
+Tab.Dungeon:CreateDropdown({ Name="Select Dungeon", Options={}, CurrentOption={}, Flag="SelectedDungeon", Callback=function(v) Options.SelectedDungeon.Value=v end })
+
+Toggles.AutoDungeon = { Value = false }
+Tab.Dungeon:CreateToggle({ Name="Auto Join Dungeon", CurrentValue=false, Flag="AutoDungeon", Callback=function(v) Toggles.AutoDungeon.Value=v; Thread("AutoDungeon", Func_AutoDungeon, v) end })
+
+Toggles.AutoInfiniteTower = { Value = false }
+Tab.Dungeon:CreateToggle({ Name="Auto Infinite Tower", CurrentValue=false, Flag="AutoInfiniteTower", Callback=function(v) Toggles.AutoInfiniteTower.Value=v; Thread("AutoInfiniteTower", Func_AutoInfiniteTower, v) end })
+
+local DungeonConfigSection = Tab.Dungeon:CreateSection("Dungeon Config")
+
+Options.SelectedDiff = { Value = nil }
+Tab.Dungeon:CreateDropdown({ Name="Select Difficulty", Options={"Easy","Medium","Hard","Extreme"}, CurrentOption={}, Flag="SelectedDiff", Callback=function(v) Options.SelectedDiff.Value=v end })
+
+Toggles.AutoDiff = { Value = false }
+Tab.Dungeon:CreateToggle({ Name="Auto Select Difficulty", CurrentValue=false, Flag="AutoDiff", Callback=function(v) Toggles.AutoDiff.Value=v end })
+
+Toggles.AutoReplay = { Value = false }
+Tab.Dungeon:CreateToggle({ Name="Auto Replay", CurrentValue=false, Flag="AutoReplay", Callback=function(v) Toggles.AutoReplay.Value=v end })
+
+Toggles.DungeonAutofarm = { Value = false }
+Tab.Dungeon:CreateToggle({ Name="Autofarm Dungeon", CurrentValue=false, Flag="DungeonAutofarm", Callback=function(v) Toggles.DungeonAutofarm.Value=v end })
+
+-- ════════════════════════════════════════════════════════════════
+--  PLAYER TAB
+-- ════════════════════════════════════════════════════════════════
+local PlayerSection = Tab.Player:CreateSection("Character")
+
+Toggles.WS = { Value = false }
+Tab.Player:CreateToggle({ Name="Custom WalkSpeed", CurrentValue=false, Flag="WS", Callback=function(v) Toggles.WS.Value=v end })
+Options.WSValue = { Value = 16 }
+Tab.Player:CreateSlider({ Name="WalkSpeed", Range={16,250}, Increment=1, CurrentValue=16, Flag="WSValue", Callback=function(v) Options.WSValue.Value=v end })
+
+Toggles.JP = { Value = false }
+Tab.Player:CreateToggle({ Name="Custom JumpPower", CurrentValue=false, Flag="JP", Callback=function(v) Toggles.JP.Value=v end })
+Options.JPValue = { Value = 50 }
+Tab.Player:CreateSlider({ Name="JumpPower", Range={0,500}, Increment=1, CurrentValue=50, Flag="JPValue", Callback=function(v) Options.JPValue.Value=v end })
+
+Toggles.Noclip = { Value = false }
+Tab.Player:CreateToggle({ Name="Noclip", CurrentValue=false, Flag="Noclip", Callback=function(v) Toggles.Noclip.Value=v; Thread("Noclip", FuncNoclip, v) end })
+
+Toggles.AntiKnockback = { Value = false }
+Tab.Player:CreateToggle({ Name="Anti Knockback", CurrentValue=false, Flag="AntiKnockback", Callback=function(v) Toggles.AntiKnockback.Value=v; Thread("AntiKnockback", Func_AntiKnockback, v) end })
+
+Toggles.Grav = { Value = false }
+Tab.Player:CreateToggle({ Name="Custom Gravity", CurrentValue=false, Flag="Grav", Callback=function(v) Toggles.Grav.Value=v end })
+Options.GravValue = { Value = 196 }
+Tab.Player:CreateSlider({ Name="Gravity", Range={0,500}, Increment=1, CurrentValue=196, Flag="GravValue", Callback=function(v) Options.GravValue.Value=v end })
+
+Toggles.Zoom = { Value = false }
+Tab.Player:CreateToggle({ Name="Custom Camera Zoom", CurrentValue=false, Flag="Zoom", Callback=function(v) Toggles.Zoom.Value=v end })
+Options.ZoomValue = { Value = 128 }
+Tab.Player:CreateSlider({ Name="Camera Zoom", Range={128,10000}, Increment=10, CurrentValue=128, Flag="ZoomValue", Callback=function(v) Options.ZoomValue.Value=v end })
+
+Toggles.FOV = { Value = false }
+Tab.Player:CreateToggle({ Name="Custom FOV", CurrentValue=false, Flag="FOV", Callback=function(v) Toggles.FOV.Value=v end })
+Options.FOVValue = { Value = 70 }
+Tab.Player:CreateSlider({ Name="Field of View", Range={30,120}, Increment=1, CurrentValue=70, Flag="FOVValue", Callback=function(v) Options.FOVValue.Value=v end })
+
+Toggles.Disable3DRender = { Value = false }
+Tab.Player:CreateToggle({ Name="Disable 3D Rendering", CurrentValue=false, Flag="Disable3DRender", Callback=function(v) Toggles.Disable3DRender.Value=v; RunService:Set3dRenderingEnabled(not v) end })
+
+Toggles.FPSBoost = { Value = false }
+Tab.Player:CreateToggle({ Name="FPS Boost", CurrentValue=false, Flag="FPSBoost", Callback=function(v) Toggles.FPSBoost.Value=v; ApplyFPSBoost(v) end })
+
+Toggles.FPSBoost_AF = { Value = false }
+Tab.Player:CreateToggle({ Name="FPS Boost [Autofarm]", CurrentValue=false, Flag="FPSBoost_AF", Callback=function(v) Toggles.FPSBoost_AF.Value=v; if v then ApplyIslandWipe() end end })
+
+local ServerSection = Tab.Player:CreateSection("Server")
+
+Toggles.AntiAFK = { Value = true }
+Tab.Player:CreateToggle({ Name="Anti AFK", CurrentValue=true, Flag="AntiAFK", Callback=function(v) Toggles.AntiAFK.Value=v end })
+
+Toggles.AntiKick = { Value = false }
+Tab.Player:CreateToggle({ Name="Anti Kick (Client)", CurrentValue=false, Flag="AntiKick", Callback=function(v) Toggles.AntiKick.Value=v end })
+
+Toggles.AutoReconnect = { Value = false }
+Tab.Player:CreateToggle({ Name="Auto Reconnect", CurrentValue=false, Flag="AutoReconnect", Callback=function(v) Toggles.AutoReconnect.Value=v; if v then Func_AutoReconnect() end end })
+
+Toggles.NoGameplayPaused = { Value = false }
+Tab.Player:CreateToggle({ Name="No Gameplay Paused", CurrentValue=false, Flag="NoGameplayPaused", Callback=function(v) Toggles.NoGameplayPaused.Value=v; Thread("NoGameplayPaused", SafeLoop("Anti-Pause", Func_NoGameplayPaused), v) end })
+
+Tab.Player:CreateButton({ Name="Serverhop", Callback=function()
+    local Servers = game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100")
+end })
+
+Tab.Player:CreateButton({ Name="Rejoin", Callback=function()
+    Services.TeleportService:Teleport(game.PlaceId, Plr)
+end })
+
+Toggles.AutoServerhop = { Value = false }
+Tab.Player:CreateToggle({ Name="Auto Serverhop", CurrentValue=false, Flag="AutoServerhop", Callback=function(v) Toggles.AutoServerhop.Value=v end })
+
+Options.AutoHopMins = { Value = 30 }
+Tab.Player:CreateSlider({ Name="Auto Hop (Minutes)", Range={0,300}, Increment=1, CurrentValue=30, Flag="AutoHopMins", Callback=function(v) Options.AutoHopMins.Value=v end })
+
+local GameSection2 = Tab.Player:CreateSection("Game Visuals")
+
+Toggles.InstantPP = { Value = false }
+Tab.Player:CreateToggle({ Name="Instant Prompt", CurrentValue=false, Flag="InstantPP", Callback=function(v) Toggles.InstantPP.Value=v end })
+
+Toggles.Fullbright = { Value = false }
+Tab.Player:CreateToggle({ Name="Fullbright", CurrentValue=false, Flag="Fullbright", Callback=function(v) Toggles.Fullbright.Value=v end })
+
+Toggles.NoFog = { Value = false }
+Tab.Player:CreateToggle({ Name="No Fog", CurrentValue=false, Flag="NoFog", Callback=function(v) Toggles.NoFog.Value=v end })
+
+Toggles.OverrideTime = { Value = false }
+Tab.Player:CreateToggle({ Name="Override Time of Day", CurrentValue=false, Flag="OverrideTime", Callback=function(v) Toggles.OverrideTime.Value=v end })
+Options.OverrideTimeValue = { Value = 12 }
+Tab.Player:CreateSlider({ Name="Time of Day", Range={0,24}, Increment=1, CurrentValue=12, Flag="OverrideTimeValue", Callback=function(v) Options.OverrideTimeValue.Value=v end })
+
+local SafetySection = Tab.Player:CreateSection("Safety")
+
+Toggles.AutoKick = { Value = true }
+Tab.Player:CreateToggle({ Name="Auto Kick", CurrentValue=true, Flag="AutoKick", Callback=function(v) Toggles.AutoKick.Value=v end })
+
+Options.SelectedKickType = { Value = {"Mod"} }
+Tab.Player:CreateDropdown({ Name="Kick Type", Options={"Mod","Player Join","Public Server"}, CurrentOption={"Mod"}, MultipleOptions=true, Flag="SelectedKickType", Callback=function(v) Options.SelectedKickType.Value=v end })
+
+-- ════════════════════════════════════════════════════════════════
+--  TELEPORT TAB
+-- ════════════════════════════════════════════════════════════════
+local IslandSection = Tab.Teleport:CreateSection("Island Teleport")
+
+Options.SelectedIsland = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Select Island", Options = {}, CurrentOption = {}, Flag = "SelectedIsland",
+    Callback = function(val)
+        if val then Remotes.TP_Portal:FireServer(val)
+        else Rayfield:Notify({ Title="Teleport", Content="Select an island first.", Duration=2 }) end
+    end,
+})
+
+local QuestTPSection = Tab.Teleport:CreateSection("Quest NPC Teleport")
+Options.SelectedQuestNPC = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Select Quest NPC", Options = {}, CurrentOption = {}, Flag = "SelectedQuestNPC",
+    Callback = function(val)
+        local questMap = { ["DungeonUnlock"]="DungeonPortalsNPC", ["SlimeKeyUnlock"]="SlimeCraftNPC" }
+        SafeTeleportToNPC(val, questMap)
+    end,
+})
+
+Tab.Teleport:CreateButton({ Name="Teleport to Level Based Quest", Callback=function()
+    local distance = tonumber(pingUI.PingMarker:WaitForChild("DistanceLabel").Text:match("%d+"))
+    if not distance then Rayfield:Notify({ Title="Error", Content="Something went wrong.", Duration=2 }) return end
+    local target = findNPCByDistance(distance)
+    if target then Plr.Character.HumanoidRootPart.CFrame = target:GetPivot() * CFrame.new(0,3,0) end
+end })
+
+local MiscNPCSection = Tab.Teleport:CreateSection("Misc NPC Teleport")
+Options.SelectedMiscNPC = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Select Misc NPC", Options = {}, CurrentOption = {}, Flag = "SelectedMiscNPC",
+    Callback = function(val)
+        local miscMap = { ["ArmHaki"]="HakiQuest", ["Observation"]="ObservationBuyer" }
+        SafeTeleportToNPC(tostring(val), miscMap)
+    end,
+})
+
+Options.SelectedMiscAllNPC = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Select Any NPC", Options = {}, CurrentOption = {}, Flag = "SelectedMiscAllNPC",
+    Callback = function(val) if val then SafeTeleportToNPC(tostring(val)) end end,
+})
+
+local MovesetSection = Tab.Teleport:CreateSection("Moveset / Mastery NPC")
+Options.SelectedMovesetNPC = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Moveset NPC", Options = {}, CurrentOption = {}, Flag = "SelectedMovesetNPC",
+    Callback = function(val) if val then SafeTeleportToNPC(tostring(val)) end end,
+})
+
+Options.SelectedMasteryNPC = { Value = nil }
+Tab.Teleport:CreateDropdown({
+    Name = "Mastery NPC", Options = {}, CurrentOption = {}, Flag = "SelectedMasteryNPC",
+    Callback = function(val) if val then SafeTeleportToNPC(tostring(val)) end end,
+})
+
+-- ════════════════════════════════════════════════════════════════
+--  WEBHOOK TAB
+-- ════════════════════════════════════════════════════════════════
+local WebhookSection = Tab.Webhook:CreateSection("Webhook Config")
+
+Options.WebhookURL = { Value = "" }
+Tab.Webhook:CreateInput({ Name="Webhook URL", PlaceholderText="https://discord.com/api/webhooks/...", RemoveTextAfterFocusLost=false, Flag="WebhookURL", Callback=function(v) Options.WebhookURL.Value=v end })
+
+Options.UID = { Value = "" }
+Tab.Webhook:CreateInput({ Name="User ID (for ping)", PlaceholderText="Enter Discord UID...", RemoveTextAfterFocusLost=false, Flag="UID", Callback=function(v) Options.UID.Value=v end })
+
+Options.SelectedData = { Value = {} }
+Tab.Webhook:CreateDropdown({ Name="Data to Send", Options={"Name","Stats","New Items","All Items"}, CurrentOption={}, MultipleOptions=true, Flag="SelectedData", Callback=function(v) Options.SelectedData.Value=v end })
+
+Options.SelectedItemRarity = { Value = {} }
+Tab.Webhook:CreateDropdown({ Name="Rarity Filter", Options={"Common","Uncommon","Rare","Epic","Legendary","Mythical","Secret"}, CurrentOption={}, MultipleOptions=true, Flag="SelectedItemRarity", Callback=function(v) Options.SelectedItemRarity.Value=v end })
+
+Toggles.PingUser = { Value = false }
+Tab.Webhook:CreateToggle({ Name="Ping User", CurrentValue=false, Flag="PingUser", Callback=function(v) Toggles.PingUser.Value=v end })
+
+Options.WebhookDelay = { Value = 5 }
+Tab.Webhook:CreateSlider({ Name="Send Every (minutes)", Range={1,30}, Increment=1, CurrentValue=5, Flag="WebhookDelay", Callback=function(v) Options.WebhookDelay.Value=v end })
+
+Toggles.SendWebhook = { Value = false }
+Tab.Webhook:CreateToggle({
+    Name = "Send Webhook", CurrentValue = false, Flag = "SendWebhook",
+    Callback = function(val)
+        Toggles.SendWebhook.Value = val
+        Thread("WebhookLoop", Func_WebhookLoop, val)
+    end,
+})
+
+Tab.Webhook:CreateButton({ Name="Test Webhook", Callback=function() PostToWebhook() end })
+
+-- ════════════════════════════════════════════════════════════════
+--  MISC TAB  (Merchant, Chests, Craft, Puzzles, Questlines)
+-- ════════════════════════════════════════════════════════════════
+local MerchSection = Tab.Misc:CreateSection("Regular Merchant")
+
+Options.SelectedMerchantItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedMerchantItems", Callback=function(v) Options.SelectedMerchantItems.Value=v end })
+
+Toggles.AutoMerchant = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Buy Selected Items", CurrentValue=false, Flag="AutoMerchant", Callback=function(v) Toggles.AutoMerchant.Value=v; Thread("AutoMerchant", SafeLoop("Merchant", Func_AutoMerchant), v) end })
+
+local DungMerchSection = Tab.Misc:CreateSection("Dungeon Merchant")
+Options.SelectedDungeonMerchantItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedDungeonMerchantItems", Callback=function(v) Options.SelectedDungeonMerchantItems.Value=v end })
+Toggles.AutoDungeonMerchant = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Buy Dungeon Items", CurrentValue=false, Flag="AutoDungeonMerchant", Callback=function(v) Toggles.AutoDungeonMerchant.Value=v end })
+
+local ValMerchSection = Tab.Misc:CreateSection("Valentine Merchant")
+Options.SelectedValentineMerchantItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedValentineMerchantItems", Callback=function(v) Options.SelectedValentineMerchantItems.Value=v end })
+Toggles.AutoValentineMerchant = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Buy Valentine Items", CurrentValue=false, Flag="AutoValentineMerchant", Callback=function(v) Toggles.AutoValentineMerchant.Value=v end })
+
+local TowerMerchSection = Tab.Misc:CreateSection("Tower Merchant")
+Options.SelectedTowerMerchantItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedTowerMerchantItems", Callback=function(v) Options.SelectedTowerMerchantItems.Value=v end })
+Toggles.AutoTowerMerchant = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Buy Tower Items", CurrentValue=false, Flag="AutoTowerMerchant", Callback=function(v) Toggles.AutoTowerMerchant.Value=v end })
+
+local BRMerchSection = Tab.Misc:CreateSection("Boss Rush Merchant")
+Options.SelectedBossRushMerchantItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedBossRushMerchantItems", Callback=function(v) Options.SelectedBossRushMerchantItems.Value=v end })
+Toggles.AutoBossRushMerchant = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Buy Boss Rush Items", CurrentValue=false, Flag="AutoBossRushMerchant", Callback=function(v) Toggles.AutoBossRushMerchant.Value=v end })
+
+local ChestSection = Tab.Misc:CreateSection("Chests")
+Options.SelectedChests = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Chest(s)", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedChests", Callback=function(v) Options.SelectedChests.Value=v end })
+Toggles.AutoChest = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Open Chest", CurrentValue=false, Flag="AutoChest", Callback=function(v) Toggles.AutoChest.Value=v; Thread("AutoChest", SafeLoop("Chest", Func_AutoChest), v) end })
+
+local CraftSection = Tab.Misc:CreateSection("Craft")
+Options.SelectedCraftItems = { Value = {} }
+Tab.Misc:CreateDropdown({ Name="Select Item(s) to Craft", Options={}, CurrentOption={}, MultipleOptions=true, Flag="SelectedCraftItems", Callback=function(v) Options.SelectedCraftItems.Value=v end })
+Toggles.AutoCraftItem = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Craft Item", CurrentValue=false, Flag="AutoCraftItem", Callback=function(v) Toggles.AutoCraftItem.Value=v; Thread("AutoCraft", SafeLoop("Craft", Func_AutoCraft), v) end })
+
+Toggles.AutoDeleteNotif = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Hide Game Notifications", CurrentValue=false, Flag="AutoDeleteNotif", Callback=function(v) Toggles.AutoDeleteNotif.Value=v end })
+
+-- Puzzles
+local PuzzleSection = Tab.Misc:CreateSection("Puzzles")
+
+Tab.Misc:CreateButton({ Name="Complete Dungeon Puzzle", Callback=function()
+    if Plr.Data.Level.Value >= 5000 then UniversalPuzzleSolver("Dungeon")
+    else Rayfield:Notify({ Title="Level Required", Content="Need Level 5000.", Duration=3 }) end
+end })
+
+Tab.Misc:CreateButton({ Name="Complete Slime Key Puzzle", Callback=function() UniversalPuzzleSolver("Slime") end })
+
+Tab.Misc:CreateButton({ Name="Complete Valentine Puzzle", Callback=function()
+    local Character = GetCharacter()
+    Remotes.TP_Portal:FireServer("Valentine")
+    task.wait(2.5)
+    for i = 1, 3 do
+        local itemName = "Heart"..i
+        local item = workspace:FindFirstChild(itemName)
+        if item then
+            local prompt = item:FindFirstChildOfClass("ProximityPrompt") or item:FindFirstChildWhichIsA("ProximityPrompt",true)
+            if prompt then
+                Character.HumanoidRootPart.CFrame = item.CFrame * CFrame.new(0,3,0)
+                task.wait(0.2)
+                fireproximityprompt(prompt)
+                task.wait(0.5)
+            end
+        end
+    end
+end })
+
+Tab.Misc:CreateButton({ Name="Complete Demonite Puzzle", Callback=function() UniversalPuzzleSolver("Demonite") end })
+
+Tab.Misc:CreateButton({ Name="Complete Hogyoku Puzzle", Callback=function()
+    if Plr.Data.Level.Value >= 8500 then UniversalPuzzleSolver("Hogyoku")
+    else Rayfield:Notify({ Title="Level Required", Content="Need Level 8500.", Duration=4 }) end
+end })
+
+-- Questlines
+local QuestlineSection = Tab.Misc:CreateSection("Questlines (BETA)")
+Tab.Misc:CreateLabel("Experimental. Store your race & clan before using. Report bugs on Discord.")
+
+Options.SelectedQuestline = { Value = nil }
+Tab.Misc:CreateDropdown({ Name="Select Questline", Options={}, CurrentOption={}, Flag="SelectedQuestline", Callback=function(v) Options.SelectedQuestline.Value=v end })
+
+Options.SelectedQuestline_Player = { Value = nil }
+Tab.Misc:CreateDropdown({ Name="Select Player (PvP Quest)", Options={}, CurrentOption={}, Flag="SelectedQuestline_Player", Callback=function(v) Options.SelectedQuestline_Player.Value=v end })
+
+Options.SelectedQuestline_DMGTaken = { Value = nil }
+Tab.Misc:CreateDropdown({ Name="Select Mob (Take Damage)", Options={}, CurrentOption={}, Flag="SelectedQuestline_DMGTaken", Callback=function(v) Options.SelectedQuestline_DMGTaken.Value=v end })
+
+Tab.Misc:CreateButton({ Name="Refresh Mob List (Quest)", Callback=function()
+    UpdateAllEntities()
+end })
+
+Toggles.AutoQuestline = { Value = false }
+Tab.Misc:CreateToggle({ Name="Auto Questline [BETA]", CurrentValue=false, Flag="AutoQuestline", Callback=function(v) Toggles.AutoQuestline.Value=v; Thread("AutoQuestline", SafeLoop("Questline", AutoQuestlineLoop), v) end })
+
+-- ════════════════════════════════════════════════════════════════
+--  CONFIG TAB
+-- ════════════════════════════════════════════════════════════════
+local ConfigSection = Tab.Config:CreateSection("Menu")
+
+Tab.Config:CreateButton({ Name="Unload Script", Callback=function()
+    getgenv().FourHub_Running = false
+    Shared.Farm = false
+    for _, c in pairs(Connections) do if typeof(c)=="RBXScriptConnection" then c:Disconnect() end end
+    Rayfield:Destroy()
+end })
+
+-- ════════════════════════════════════════════════════════════════
+--  ALL ORIGINAL GAME LOGIC  (unchanged — paste your original
+--  function bodies here: Func_AutoHaki, Func_AutoM1, Func_KillAura,
+--  Func_AutoSkill, Func_AutoCombo, Func_AutoStats, Func_WebhookLoop,
+--  Func_AutoMerchant, Func_AutoTrade, Func_AutoChest, Func_AutoCraft,
+--  Func_ArtifactAutomation, Func_AutoDungeon, Func_AutoInfiniteTower,
+--  Func_AutoReconnect, Func_NoGameplayPaused, FuncNoclip, FuncTPW,
+--  Func_AntiKnockback, ApplyFPSBoost, ApplyIslandWipe,
+--  ExecuteFarmLogic, PostToWebhook, AutoQuestlineLoop,
+--  UniversalPuzzleSolver, UpdateNPCLists, UpdateAllEntities,
+--  PopulateNPCLists, HandleSummons, GetPityTarget, GetSummonTarget,
+--  GetWorldBossTarget, GetLevelFarmTarget, GetAllMobTarget,
+--  GetMobTarget, GetAltHelpTarget, CheckTask, FireBossRemote,
+--  UpdateSwitchState, AutoUpgradeLoop, AutoEquipArtifacts,
+--  EvaluateArtifact2, GetBestOwnedTitle, PanicStop, DisableIdled,
+--  InitAutoKick, ACThing, GetFormattedItemSections,
+--  GetCurrentPity, CommaFormat, Abbreviate … etc.)
+--
+--  >>> COPY LINES 196–4320 FROM YOUR ORIGINAL SCRIPT HERE <<<
+--
+-- ════════════════════════════════════════════════════════════════
+
+-- RunService loop (player stats — same as original)
+Connections.Player_General = RunService.Stepped:Connect(function()
+    local Hum = Plr.Character and Plr.Character:FindFirstChildOfClass("Humanoid")
+    if Hum then
+        if Toggles.WS  and Toggles.WS.Value  then Hum.WalkSpeed = Options.WSValue.Value end
+        if Toggles.JP  and Toggles.JP.Value  then Hum.JumpPower = Options.JPValue.Value Hum.UseJumpPower = true end
+        if Toggles.HH  and Toggles.HH.Value  then Hum.HipHeight = Options.HHValue.Value end
+    end
+    workspace.Gravity = (Toggles.Grav and Toggles.Grav.Value) and Options.GravValue.Value or 192
+    if Toggles.FOV  and Toggles.FOV.Value  then workspace.CurrentCamera.FieldOfView = Options.FOVValue.Value end
+    if Toggles.Zoom and Toggles.Zoom.Value then Plr.CameraMaxZoomDistance = Options.ZoomValue.Value end
+end)
+
+task.spawn(function()
+    while task.wait() do
+        if Toggles.Fullbright and Toggles.Fullbright.Value then
+            Lighting.Brightness = 2 Lighting.ClockTime = 14 Lighting.GlobalShadows = false
+        elseif Toggles.OverrideTime and Toggles.OverrideTime.Value then
+            Lighting.ClockTime = Options.OverrideTimeValue.Value
+        end
+        if Toggles.NoFog and Toggles.NoFog.Value then Lighting.FogEnd = 9e9 end
+        if Library and Library.Unloaded then break end
+        if not getgenv().FourHub_Running then break end
+    end
+end)
+
+game:GetService("ProximityPromptService").PromptButtonHoldBegan:Connect(function(prompt)
+    if Toggles.InstantPP and Toggles.InstantPP.Value then
+        prompt.HoldDuration = 0
+    end
+end)
+
+-- Anti-AFK
+task.spawn(function()
+    while true do
+        task.wait(60)
+        if Toggles.AntiAFK and Toggles.AntiAFK.Value then
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                task.wait(0.2)
+                VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+            end)
+        end
+    end
+end)
+
+-- Inventory sync loop
+task.spawn(function()
+    while getgenv().FourHub_Running do
+        if Remotes.ReqInventory then Remotes.ReqInventory:FireServer() end
+        task.wait(30)
+    end
+end)
+
+-- Notification
+local NotifFrame = PGui:WaitForChild("NotificationUI"):WaitForChild("NotificationsFrame")
+NotifFrame.ChildAdded:Connect(function(child) ProcessNotification(child) end)
+for _, child in pairs(NotifFrame:GetChildren()) do ProcessNotification(child) end
+
+-- Device detection notify
+if UIS.TouchEnabled and not UIS.KeyboardEnabled then
+    Rayfield:Notify({ Title="Device", Content="Phone detected — consider adjusting UI scale.", Duration=4 })
+else
+    Rayfield:Notify({ Title="Script Loaded", Content="FourHub | Sailor Piece v1.0 — Rayfield UI", Duration=5 })
+end
+
+Rayfield:Notify({ Title="Support", Content="Report bugs and give suggestions in Discord!", Duration=6 })
